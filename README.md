@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="assets/nsmam_banner.png" width="600" alt="NSMAM Banner">
+  <img src="assets/nsmam_banner.png" width="400" alt="NSMAM Banner">
 </p>
 
 # NSMAM (Network Security Manager All-in-One Monitor)
