@@ -55,7 +55,12 @@ pub fn draw(f: &mut Frame, app: &mut App, backend: &dyn FirewallBackend) {
     ])];
     
     let header = Paragraph::new(header_text)
-        .block(Block::default().borders(Borders::ALL).title(" Network Security Manager "));
+        .block(
+            Block::default()
+                .borders(Borders::ALL)
+                .title(" Network Security Manager ")
+                .title(Line::from(vec![Span::styled(" made by Steph-ux ", Style::default().fg(Color::Gray))]).right_aligned())
+        );
     f.render_widget(header, main_layout[0]);
 
     // 2. Draw Main Content (Rules list & Hotkeys)
