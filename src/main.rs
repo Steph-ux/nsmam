@@ -91,6 +91,29 @@ fn main() -> Result<(), anyhow::Error> {
     let config_path = "/etc/nsmam/config.toml";
     let mut app = App::new(config_path, multiplexer_detected);
 
+    // Override backend config if passed via command line arguments
+    let args: Vec<String> = std::env::args().collect();
+    let mut forced_backend = None;
+    let mut i = 1;
+    while i < args.len() {
+        if args[i] == "--backend" || args[i] == "-b" {
+            if i + 1 < args.len() {
+                forced_backend = Some(args[i + 1].clone());
+                i += 2;
+            } else {
+                i += 1;
+            }
+        } else if !args[i].starts_with('-') {
+            forced_backend = Some(args[i].clone());
+            i += 1;
+        } else {
+            i += 1;
+        }
+    }
+    if let Some(fb) = forced_backend {
+        app.config.backend = fb;
+    }
+
     // 4. Initialize firewall backend
     let backend = detect_backend(&app.config.backend);
     if let Err(e) = app.refresh_rules(&*backend) {

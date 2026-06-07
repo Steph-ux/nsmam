@@ -48,6 +48,15 @@ Launch the TUI interface with root privileges:
 sudo nsmam
 ```
 
+By default, NSMAM loads the forced backend configured in `/etc/nsmam/config.toml` (or auto-detects if missing). You can manually override the backend on launch using command-line arguments:
+
+```bash
+# Force a specific backend (ufw, iptables, or nftables)
+sudo nsmam --backend iptables
+# Or using positional argument
+sudo ./nsmam-x86_64-linux ufw
+```
+
 ### Key Bindings
 
 | Key | Action |
