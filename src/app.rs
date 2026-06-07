@@ -193,3 +193,99 @@ impl App {
         Ok(())
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::firewall::{FirewallError, RuleAction};
+    use std::sync::Mutex;
+
+    struct MockBackend {
+        rules: Mutex<Vec<FirewallRule>>,
+        edited_calls: Mutex<Vec<(String, FirewallRule)>>,
+    }
+
+    impl FirewallBackend for MockBackend {
+        fn name(&self) -> &str { "mock" }
+        fn is_active(&self) -> bool { true }
+        fn is_enabled(&self) -> bool { true }
+        fn get_default_policy(&self) -> Result<String, FirewallError> { Ok("ACCEPT".to_string()) }
+        fn get_rules(&self) -> Result<Vec<FirewallRule>, FirewallError> {
+            Ok(self.rules.lock().unwrap().clone())
+        }
+        fn add_rule(&self, rule: &FirewallRule) -> Result<(), FirewallError> {
+            self.rules.lock().unwrap().push(rule.clone());
+            Ok(())
+        }
+        fn edit_rule(&self, rule_id: &str, new_rule: &FirewallRule) -> Result<(), FirewallError> {
+            self.edited_calls.lock().unwrap().push((rule_id.to_string(), new_rule.clone()));
+            let mut rules = self.rules.lock().unwrap();
+            if let Some(r) = rules.iter_mut().find(|r| r.id == rule_id) {
+                *r = new_rule.clone();
+            }
+            Ok(())
+        }
+        fn delete_rule(&self, rule_id: &str) -> Result<(), FirewallError> {
+            let mut rules = self.rules.lock().unwrap();
+            rules.retain(|r| r.id != rule_id);
+            Ok(())
+        }
+        fn toggle(&self, _enable: bool) -> Result<(), FirewallError> { Ok(()) }
+        fn flush_all(&self) -> Result<(), FirewallError> { Ok(()) }
+    }
+
+    #[test]
+    fn test_rollback_edited_rule() {
+        let backend = MockBackend {
+            rules: Mutex::new(vec![
+                FirewallRule {
+                    id: "2".to_string(),
+                    port: "80".to_string(),
+                    protocol: "tcp".to_string(),
+                    action: RuleAction::Deny,
+                    source: "Anywhere".to_string(),
+                    destination: "Anywhere".to_string(),
+                }
+            ]),
+            edited_calls: Mutex::new(Vec::new()),
+        };
+
+        // Create app state
+        let test_log_file = "./test_app_rollback.log";
+        let _ = std::fs::remove_file(test_log_file);
+        let mut app = App::new("/invalid/path/config.toml", false);
+        app.logger = Logger::new(test_log_file);
+
+        // Add a transaction representing editing rule: old = ALLOW (port 80), new = DENY (port 80)
+        let old_rule = FirewallRule {
+            id: "2".to_string(),
+            port: "80".to_string(),
+            protocol: "tcp".to_string(),
+            action: RuleAction::Allow,
+            source: "Anywhere".to_string(),
+            destination: "Anywhere".to_string(),
+        };
+        let new_rule = FirewallRule {
+            id: "2".to_string(),
+            port: "80".to_string(),
+            protocol: "tcp".to_string(),
+            action: RuleAction::Deny,
+            source: "Anywhere".to_string(),
+            destination: "Anywhere".to_string(),
+        };
+
+        app.transaction_log.push(TransactionAction::RuleEdited(old_rule, new_rule));
+
+        // Trigger rollback
+        app.rollback_all(&backend).unwrap();
+
+        // Verify edited_calls has the call to edit rule "2" back to old_rule
+        let calls = backend.edited_calls.lock().unwrap();
+        assert_eq!(calls.len(), 1);
+        assert_eq!(calls[0].0, "2");
+        assert_eq!(calls[0].1.action, RuleAction::Allow);
+
+        let _ = std::fs::remove_file(test_log_file);
+    }
+}
+
