@@ -1,0 +1,17 @@
+[package]
+name = "nsmam"
+version = "0.1.0"
+edition = "2021"
+authors = ["sassogba"]
+description = "Network Security Manager All-in-One Monitor - TUI Firewall Manager"
+
+[dependencies]
+ratatui = { version = "0.26.1", features = ["crossterm"] }
+crossterm = "0.27"
+serde = { version = "1.0", features = ["derive"] }
+toml = "0.8"
+regex = "1.10"
+signal-hook = "0.3.17"
+anyhow = "1.0"
+thiserror = "1.0"
+libc = "0.2"
