@@ -47,6 +47,30 @@ impl NftablesBackend {
         Ok(())
     }
 
+    fn get_active_target(&self) -> (String, String, String) {
+        if let Ok(ruleset) = self.run_cmd(&["list", "ruleset"]) {
+            let chains = parse_input_chains(&ruleset);
+            select_active_chain(&chains)
+        } else {
+            ("inet".to_string(), "nsmam".to_string(), "input".to_string())
+        }
+    }
+
+    fn initialize_table_if_nsmam(&self, family: &str, table: &str, chain: &str) -> Result<(), FirewallError> {
+        if table == "nsmam" {
+            let _ = self.run_cmd(&["add", "table", family, table]);
+            let _ = self.run_cmd(&[
+                "add",
+                "chain",
+                family,
+                table,
+                chain,
+                "{ type filter hook input priority filter ; policy accept ; }",
+            ]);
+        }
+        Ok(())
+    }
+
     fn persist_rules(&self) -> Result<(), FirewallError> {
         let shell_cmd = format!("{} list ruleset > /etc/nftables.conf", self.binary_path);
         let status = Command::new("sh").args(&["-c", &shell_cmd]).status()?;
@@ -63,8 +87,8 @@ pub fn parse_nftables_rules(stdout: &str) -> Result<Vec<FirewallRule>, FirewallE
     let mut rules = Vec::new();
     
     let re_handle = Regex::new(r"handle\s+(\d+)").unwrap();
-    let re_source = Regex::new(r"ip\s+saddr\s+(\S+)").unwrap();
-    let re_dport = Regex::new(r"(tcp|udp)?\s*dport\s+(\S+)").unwrap();
+    let re_source = Regex::new(r"ip\s+saddr\s+(\{[^}]+\}|\S+)").unwrap();
+    let re_dport = Regex::new(r"(tcp|udp)?\s*dport\s+(\{[^}]+\}|\S+)").unwrap();
 
     for line in stdout.lines() {
         let trimmed = line.trim();
@@ -134,6 +158,121 @@ pub fn parse_nftables_policy(stdout: &str) -> Result<String, FirewallError> {
     Ok("ACCEPT".to_string())
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct NftChain {
+    pub family: String,
+    pub table: String,
+    pub chain: String,
+    pub has_rules: bool,
+}
+
+pub fn parse_input_chains(ruleset: &str) -> Vec<NftChain> {
+    let mut chains = Vec::new();
+    let mut current_family = String::new();
+    let mut current_table = String::new();
+    let mut current_chain = String::new();
+    let mut in_input_chain = false;
+    let mut rule_count = 0;
+
+    let re_table = Regex::new(r"^\s*table\s+(\S+)\s+(\S+)\s*\{").unwrap();
+    let re_chain = Regex::new(r"^\s*chain\s+(\S+)\s*\{").unwrap();
+
+    for line in ruleset.lines() {
+        let trimmed = line.trim();
+        
+        if trimmed.starts_with('}') {
+            if in_input_chain {
+                chains.push(NftChain {
+                    family: current_family.clone(),
+                    table: current_table.clone(),
+                    chain: current_chain.clone(),
+                    has_rules: rule_count > 0,
+                });
+                in_input_chain = false;
+            }
+            continue;
+        }
+
+        if let Some(caps) = re_table.captures(line) {
+            current_family = caps.get(1).unwrap().as_str().to_string();
+            current_table = caps.get(2).unwrap().as_str().to_string();
+            continue;
+        }
+
+        if let Some(caps) = re_chain.captures(line) {
+            current_chain = caps.get(1).unwrap().as_str().to_string();
+            in_input_chain = false;
+            rule_count = 0;
+            continue;
+        }
+
+        if trimmed.contains("type filter hook input") {
+            in_input_chain = true;
+            continue;
+        }
+
+        if in_input_chain {
+            if trimmed.contains("accept") || trimmed.contains("drop") || trimmed.contains("reject") || trimmed.contains("jump") || trimmed.contains("goto") {
+                rule_count += 1;
+            }
+        }
+    }
+
+    chains
+}
+
+pub fn select_active_chain(chains: &[NftChain]) -> (String, String, String) {
+    if chains.is_empty() {
+        return ("inet".to_string(), "nsmam".to_string(), "input".to_string());
+    }
+
+    // 1. Look for a chain in the "nsmam" table
+    if let Some(c) = chains.iter().find(|c| c.table == "nsmam") {
+        return (c.family.clone(), c.table.clone(), c.chain.clone());
+    }
+
+    // 2. Look for active chains with rules:
+    // 2a. "inet" family in "filter" table with rules
+    if let Some(c) = chains.iter().find(|c| c.has_rules && c.family == "inet" && c.table == "filter") {
+        return (c.family.clone(), c.table.clone(), c.chain.clone());
+    }
+    // 2b. "inet" family in "firewalld" table with rules
+    if let Some(c) = chains.iter().find(|c| c.has_rules && c.family == "inet" && c.table == "firewalld") {
+        return (c.family.clone(), c.table.clone(), c.chain.clone());
+    }
+    // 2c. Any chain in "filter" table with rules
+    if let Some(c) = chains.iter().find(|c| c.has_rules && c.table == "filter") {
+        return (c.family.clone(), c.table.clone(), c.chain.clone());
+    }
+    // 2d. Any chain with rules
+    if let Some(c) = chains.iter().find(|c| c.has_rules) {
+        return (c.family.clone(), c.table.clone(), c.chain.clone());
+    }
+
+    // 3. If no chains have rules, look for empty chains:
+    // 3a. "inet" family in "filter" table
+    if let Some(c) = chains.iter().find(|c| c.family == "inet" && c.table == "filter") {
+        return (c.family.clone(), c.table.clone(), c.chain.clone());
+    }
+    // 3b. Any chain in "filter" table
+    if let Some(c) = chains.iter().find(|c| c.table == "filter") {
+        return (c.family.clone(), c.table.clone(), c.chain.clone());
+    }
+    // 3c. "inet" family in "firewalld" table
+    if let Some(c) = chains.iter().find(|c| c.family == "inet" && c.table == "firewalld") {
+        return (c.family.clone(), c.table.clone(), c.chain.clone());
+    }
+    // 3d. Any chain of family "inet"
+    if let Some(c) = chains.iter().find(|c| c.family == "inet") {
+        return (c.family.clone(), c.table.clone(), c.chain.clone());
+    }
+
+    // 4. Fallback to the first chain
+    let first = &chains[0];
+    (first.family.clone(), first.table.clone(), first.chain.clone())
+}
+
+
 impl FirewallBackend for NftablesBackend {
     fn name(&self) -> &str {
         "nftables"
@@ -144,7 +283,6 @@ impl FirewallBackend for NftablesBackend {
     }
 
     fn is_enabled(&self) -> bool {
-        // check if nft service or ruleset listing is successful
         if let Ok(output) = Command::new(&self.binary_path).arg("list").arg("ruleset").output() {
             output.status.success()
         } else {
@@ -153,10 +291,10 @@ impl FirewallBackend for NftablesBackend {
     }
 
     fn get_default_policy(&self) -> Result<String, FirewallError> {
-        let stdout = match self.run_cmd(&["list", "chain", "inet", "nsmam", "input"]) {
+        let (family, table, chain) = self.get_active_target();
+        let stdout = match self.run_cmd(&["list", "chain", &family, &table, &chain]) {
             Ok(out) => out,
             Err(_) => {
-                // Table doesn't exist, default policy is accept
                 return Ok("ACCEPT".to_string());
             }
         };
@@ -164,10 +302,10 @@ impl FirewallBackend for NftablesBackend {
     }
 
     fn get_rules(&self) -> Result<Vec<FirewallRule>, FirewallError> {
-        let stdout = match self.run_cmd(&["-a", "list", "chain", "inet", "nsmam", "input"]) {
+        let (family, table, chain) = self.get_active_target();
+        let stdout = match self.run_cmd(&["-a", "list", "chain", &family, &table, &chain]) {
             Ok(out) => out,
             Err(_) => {
-                // Table doesn't exist yet, return empty rules list
                 return Ok(Vec::new());
             }
         };
@@ -175,9 +313,10 @@ impl FirewallBackend for NftablesBackend {
     }
 
     fn add_rule(&self, rule: &FirewallRule) -> Result<(), FirewallError> {
-        let _ = self.initialize_table(); // Ensure table and chain are created
+        let (family, table, chain) = self.get_active_target();
+        let _ = self.initialize_table_if_nsmam(&family, &table, &chain);
 
-        let mut cmd_args = vec!["add", "rule", "inet", "nsmam", "input"];
+        let mut cmd_args = vec!["insert", "rule", &family, &table, &chain];
         
         let mut source_arg = String::new();
         if rule.source != "Anywhere" && !rule.source.is_empty() {
@@ -208,9 +347,10 @@ impl FirewallBackend for NftablesBackend {
     }
 
     fn edit_rule(&self, rule_id: &str, new_rule: &FirewallRule) -> Result<(), FirewallError> {
-        let _ = self.initialize_table(); // Ensure table and chain exist
+        let (family, table, chain) = self.get_active_target();
+        let _ = self.initialize_table_if_nsmam(&family, &table, &chain);
 
-        let mut cmd_args = vec!["replace", "rule", "inet", "nsmam", "input", "handle", rule_id];
+        let mut cmd_args = vec!["replace", "rule", &family, &table, &chain, "handle", rule_id];
         
         let mut source_arg = String::new();
         if new_rule.source != "Anywhere" && !new_rule.source.is_empty() {
@@ -241,22 +381,20 @@ impl FirewallBackend for NftablesBackend {
     }
 
     fn delete_rule(&self, rule_id: &str) -> Result<(), FirewallError> {
-        self.run_cmd(&["delete", "rule", "inet", "nsmam", "input", "handle", rule_id])?;
+        let (family, table, chain) = self.get_active_target();
+        self.run_cmd(&["delete", "rule", &family, &table, &chain, "handle", rule_id])?;
         self.persist_rules()?;
         Ok(())
     }
 
     fn toggle(&self, enable: bool) -> Result<(), FirewallError> {
-        let _ = self.initialize_table(); // Ensure table and chain exist
+        let (family, table, chain) = self.get_active_target();
+        let _ = self.initialize_table_if_nsmam(&family, &table, &chain);
         
         let policy = if enable { "drop" } else { "accept" };
-        let cmd = format!("chain inet nsmam input {{ policy {} ; }}", policy);
-        self.run_cmd(&["-c", &cmd])?; // Wait, running nft with raw config block
         
-        // Alternatively run directly:
-        // nft "add chain inet nsmam input { policy drop ; }"
         let status = Command::new(&self.binary_path)
-            .args(&["add", "chain", "inet", "nsmam", "input", &format!("{{ policy {} ; }}", policy)])
+            .args(&["add", "chain", &family, &table, &chain, &format!("{{ policy {} ; }}", policy)])
             .status()?;
         if !status.success() {
             return Err(FirewallError::ExecutionFailed("Failed to toggle nftables policy".to_string()));
@@ -266,8 +404,12 @@ impl FirewallBackend for NftablesBackend {
     }
 
     fn flush_all(&self) -> Result<(), FirewallError> {
-        // Delete the entire nsmam table
-        let _ = self.run_cmd(&["delete", "table", "inet", "nsmam"]);
+        let (family, table, chain) = self.get_active_target();
+        if table == "nsmam" {
+            let _ = self.run_cmd(&["delete", "table", &family, &table]);
+        } else {
+            let _ = self.run_cmd(&["flush", "chain", &family, &table, &chain]);
+        }
         self.persist_rules()?;
         Ok(())
     }
@@ -276,6 +418,47 @@ impl FirewallBackend for NftablesBackend {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_parse_input_chains() {
+        let mock_ruleset = "table inet filter {\n\
+            chain input {\n\
+                type filter hook input priority filter; policy drop;\n\
+                tcp dport 22 accept\n\
+            }\n\
+            chain forward {\n\
+                type filter hook forward priority filter; policy drop;\n\
+            }\n\
+        }\n\
+        table ip empty_table {\n\
+            chain INPUT {\n\
+                type filter hook input priority filter; policy accept;\n\
+            }\n\
+        }";
+        
+        let chains = parse_input_chains(mock_ruleset);
+        assert_eq!(chains.len(), 2);
+        
+        assert_eq!(chains[0].family, "inet");
+        assert_eq!(chains[0].table, "filter");
+        assert_eq!(chains[0].chain, "input");
+        assert!(chains[0].has_rules);
+
+        assert_eq!(chains[1].family, "ip");
+        assert_eq!(chains[1].table, "empty_table");
+        assert_eq!(chains[1].chain, "INPUT");
+        assert!(!chains[1].has_rules);
+    }
+
+    #[test]
+    fn test_select_active_chain() {
+        let chains = vec![
+            NftChain { family: "ip".to_string(), table: "filter".to_string(), chain: "INPUT".to_string(), has_rules: false },
+            NftChain { family: "inet".to_string(), table: "firewalld".to_string(), chain: "filter_INPUT".to_string(), has_rules: true },
+        ];
+        let selected = select_active_chain(&chains);
+        assert_eq!(selected, ("inet".to_string(), "firewalld".to_string(), "filter_INPUT".to_string()));
+    }
 
     #[test]
     fn test_parse_nftables_rules_mock() {
