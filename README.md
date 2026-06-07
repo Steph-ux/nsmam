@@ -17,17 +17,28 @@ A lightweight, premium Text User Interface (TUI) firewall manager written in Rus
 ## Requirements
 
 - **Linux OS** (Debian, Ubuntu, RHEL, CentOS)
-- **Rust Toolchain** (`cargo` & `rustc` version 1.80+) for installation/compilation.
+- **Rust Toolchain** (`cargo` & `rustc` version 1.80+) *only if compiling from source*.
 
 ## Installation
 
-Run the one-command installer script as root:
+You can install NSMAM using either the precompiled standalone binary (no Rust/Cargo toolchain required) or by compiling from source.
 
+### Option 1: Precompiled Standalone Binary (Recommended)
+
+1. Download the latest `nsmam-x86_64-linux` static binary from the [GitHub Releases](https://github.com/Steph-ux/nsmam/releases).
+2. Install it to your system path:
+   ```bash
+   sudo cp nsmam-x86_64-linux /usr/local/bin/nsmam
+   sudo chmod +x /usr/local/bin/nsmam
+   ```
+
+### Option 2: Compile from Source
+
+Run the automated installer script:
 ```bash
 sudo ./install.sh
 ```
-
-The script will prompt you for your preferred backend (or auto-detect), configure log file privileges (`640` owned by `root:adm`), compile the TUI release binary, and install it to `/usr/local/bin/nsmam`.
+The script will auto-detect your active firewall backend (or prompt you to force one), configure log file privileges (`640` owned by `root:adm`), compile the release binary, and install it to `/usr/local/bin/nsmam`.
 
 ## Usage
 
