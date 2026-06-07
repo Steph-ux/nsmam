@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="assets/nsmam_banner.png" width="600" alt="NSMAM Banner">
+</p>
+
 # NSMAM (Network Security Manager All-in-One Monitor)
 
 A lightweight, premium Text User Interface (TUI) firewall manager written in Rust. It provides a unified, interactive dashboard to monitor and manipulate system rules for **UFW**, **nftables**, and **iptables** in Linux environments (Debian, Ubuntu, CentOS, RHEL).
