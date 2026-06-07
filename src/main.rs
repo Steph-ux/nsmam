@@ -40,23 +40,16 @@ fn detect_backend(forced_backend: &str) -> Box<dyn FirewallBackend> {
             // Auto-detect priority
             if ufw.is_active() && ufw.is_enabled() {
                 Box::new(ufw)
+            } else if ipt.is_active() && ipt.is_enabled() {
+                Box::new(ipt)
             } else if nft.is_active() && nft.is_enabled() {
                 Box::new(nft)
-            } else if ipt.is_active() {
-                // Check if iptables is legacy vs wrapper
-                if firewall::iptables::is_iptables_legacy("/sbin/iptables") {
-                    Box::new(ipt)
-                } else if nft.is_active() {
-                    Box::new(nft) // Prefer nftables if iptables is a wrapper
-                } else {
-                    Box::new(ipt)
-                }
             } else if ufw.is_active() {
                 Box::new(ufw)
-            } else if nft.is_active() {
-                Box::new(nft)
-            } else {
+            } else if ipt.is_active() {
                 Box::new(ipt)
+            } else {
+                Box::new(nft)
             }
         }
     }
