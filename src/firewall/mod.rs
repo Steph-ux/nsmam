@@ -61,6 +61,7 @@ pub trait FirewallBackend {
     fn get_default_policy(&self) -> Result<String, FirewallError>;
     fn get_rules(&self) -> Result<Vec<FirewallRule>, FirewallError>;
     fn add_rule(&self, rule: &FirewallRule) -> Result<(), FirewallError>;
+    fn edit_rule(&self, rule_id: &str, new_rule: &FirewallRule) -> Result<(), FirewallError>;
     fn delete_rule(&self, rule_id: &str) -> Result<(), FirewallError>;
     fn toggle(&self, enable: bool) -> Result<(), FirewallError>;
     fn flush_all(&self) -> Result<(), FirewallError>;

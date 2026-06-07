@@ -215,6 +215,41 @@ impl FirewallBackend for IptablesBackend {
         Ok(())
     }
 
+    fn edit_rule(&self, rule_id: &str, new_rule: &FirewallRule) -> Result<(), FirewallError> {
+        let mut args = vec!["-R", "INPUT", rule_id];
+
+        // Format source
+        if new_rule.source != "Anywhere" && !new_rule.source.is_empty() {
+            args.push("-s");
+            args.push(&new_rule.source);
+        }
+
+        // Format protocol
+        if new_rule.protocol != "any" {
+            args.push("-p");
+            args.push(&new_rule.protocol);
+            
+            // Format port
+            if new_rule.port != "any" && !new_rule.port.is_empty() {
+                args.push("--dport");
+                args.push(&new_rule.port);
+            }
+        }
+
+        // Format action
+        let target = match new_rule.action {
+            RuleAction::Allow => "ACCEPT",
+            RuleAction::Deny => "DROP",
+            RuleAction::Reject => "REJECT",
+        };
+        args.push("-j");
+        args.push(target);
+
+        self.run_cmd(&args)?;
+        self.persist_rules()?;
+        Ok(())
+    }
+
     fn delete_rule(&self, rule_id: &str) -> Result<(), FirewallError> {
         // Delete by line number
         self.run_cmd(&["-D", "INPUT", rule_id])?;

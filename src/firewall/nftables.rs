@@ -207,6 +207,39 @@ impl FirewallBackend for NftablesBackend {
         Ok(())
     }
 
+    fn edit_rule(&self, rule_id: &str, new_rule: &FirewallRule) -> Result<(), FirewallError> {
+        let _ = self.initialize_table(); // Ensure table and chain exist
+
+        let mut cmd_args = vec!["replace", "rule", "inet", "nsmam", "input", "handle", rule_id];
+        
+        let mut source_arg = String::new();
+        if new_rule.source != "Anywhere" && !new_rule.source.is_empty() {
+            source_arg = format!("ip saddr {}", new_rule.source);
+            cmd_args.push(&source_arg);
+        }
+
+        let mut proto_port_arg = String::new();
+        if new_rule.protocol != "any" && !new_rule.port.is_empty() && new_rule.port != "any" {
+            proto_port_arg = format!("{} dport {}", new_rule.protocol, new_rule.port);
+            cmd_args.push(&proto_port_arg);
+        } else if !new_rule.port.is_empty() && new_rule.port != "any" {
+            proto_port_arg = format!("dport {}", new_rule.port);
+            cmd_args.push(&proto_port_arg);
+        }
+
+        let target = match new_rule.action {
+            RuleAction::Allow => "accept",
+            RuleAction::Deny => "drop",
+            RuleAction::Reject => "reject",
+        };
+        cmd_args.push(target);
+
+        // Execute replace rule
+        self.run_cmd(&cmd_args)?;
+        self.persist_rules()?;
+        Ok(())
+    }
+
     fn delete_rule(&self, rule_id: &str) -> Result<(), FirewallError> {
         self.run_cmd(&["delete", "rule", "inet", "nsmam", "input", "handle", rule_id])?;
         self.persist_rules()?;

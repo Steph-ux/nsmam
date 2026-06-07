@@ -124,6 +124,7 @@ pub fn draw(f: &mut Frame, app: &mut App, backend: &dyn FirewallBackend) {
     // Draw Quick Help Panel
     let help_text = vec![
         Line::from(vec![Span::styled("[A]", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)), Span::raw("  Add Rule")]),
+        Line::from(vec![Span::styled("[E]", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)), Span::raw("  Edit Selected")]),
         Line::from(vec![Span::styled("[D]", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)), Span::raw("  Delete Selected")]),
         Line::from(vec![Span::styled("[T]", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)), Span::raw("  Toggle Firewall Status")]),
         Line::from(vec![Span::styled("[F]", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)), Span::raw("  Flush All Rules")]),
@@ -155,13 +156,15 @@ pub fn draw(f: &mut Frame, app: &mut App, backend: &dyn FirewallBackend) {
 
     // 4. Draw Modals (if active)
     match &app.active_screen {
-        ActiveScreen::AddRule => {
+        ActiveScreen::AddRule | ActiveScreen::EditRule => {
+            let is_edit = matches!(app.active_screen, ActiveScreen::EditRule);
             let popup_rect = centered_rect(80, 70, f.size());
             f.render_widget(Clear, popup_rect);
 
+            let title = if is_edit { " Edit Firewall Rule " } else { " Add New Firewall Rule " };
             let popup_block = Block::default()
                 .borders(Borders::ALL)
-                .title(" Add New Firewall Rule ");
+                .title(title);
             f.render_widget(popup_block, popup_rect);
 
             // Split popup into Form (left) and Listening Services Sidebar (right)
@@ -223,7 +226,8 @@ pub fn draw(f: &mut Frame, app: &mut App, backend: &dyn FirewallBackend) {
             } else {
                 Style::default().fg(Color::Green)
             };
-            let submit_btn = Paragraph::new("[ Submit Rule ]")
+            let submit_label = if is_edit { "[ Save Changes ]" } else { "[ Submit Rule ]" };
+            let submit_btn = Paragraph::new(submit_label)
                 .style(submit_style)
                 .block(Block::default().borders(Borders::ALL).border_style(submit_style));
             f.render_widget(submit_btn, btn_layout[0]);

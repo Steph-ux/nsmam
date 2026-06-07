@@ -32,6 +32,7 @@ pub fn load_config(path: &str) -> Config {
 pub enum ActiveScreen {
     Main,
     AddRule,
+    EditRule,
     ConfirmDelete,
     Error(String),
 }
@@ -51,6 +52,7 @@ pub enum FormField {
 pub enum TransactionAction {
     RuleAdded(FirewallRule),
     RuleDeleted(FirewallRule),
+    RuleEdited(FirewallRule, FirewallRule),
 }
 
 pub struct App {
@@ -71,6 +73,7 @@ pub struct App {
     pub form_source: String,
     pub active_form_field: FormField,
     pub selected_rule_to_delete: Option<FirewallRule>,
+    pub editing_rule_id: Option<String>,
 }
 
 impl App {
@@ -94,6 +97,7 @@ impl App {
             form_source: "Anywhere".to_string(),
             active_form_field: FormField::Port,
             selected_rule_to_delete: None,
+            editing_rule_id: None,
         }
     }
 
@@ -124,6 +128,18 @@ impl App {
         self.form_action = RuleAction::Allow;
         self.form_source = "Anywhere".to_string();
         self.active_form_field = FormField::Port;
+        self.editing_rule_id = None;
+        self.selected_service_index = 0;
+        self.refresh_services();
+    }
+
+    pub fn init_edit_rule_form(&mut self, rule: &FirewallRule) {
+        self.form_port = rule.port.clone();
+        self.form_proto = rule.protocol.clone();
+        self.form_action = rule.action;
+        self.form_source = rule.source.clone();
+        self.active_form_field = FormField::Port;
+        self.editing_rule_id = Some(rule.id.clone());
         self.selected_service_index = 0;
         self.refresh_services();
     }
@@ -154,6 +170,21 @@ impl App {
                     // Revert deleting by re-adding the rule
                     let _ = backend.add_rule(&rule);
                     let _ = self.logger.log_action(backend.name(), "rollback_re_add", &format!("Re-added rule on port {}", rule.port));
+                }
+                TransactionAction::RuleEdited(old_rule, new_rule) => {
+                    // Revert editing by editing new_rule back to old_rule.
+                    // We must find the current ID of new_rule (by matching its current fields).
+                    if let Ok(current_rules) = backend.get_rules() {
+                        if let Some(matching_rule) = current_rules.iter().find(|r| {
+                            r.port == new_rule.port
+                            && r.protocol == new_rule.protocol
+                            && r.action == new_rule.action
+                            && r.source == new_rule.source
+                        }) {
+                            let _ = backend.edit_rule(&matching_rule.id, &old_rule);
+                            let _ = self.logger.log_action(backend.name(), "rollback_edit", &format!("Reverted rule edit on port {}", old_rule.port));
+                        }
+                    }
                 }
             }
         }

@@ -158,6 +158,13 @@ fn main() -> Result<(), anyhow::Error> {
                                 app.init_add_rule_form();
                                 app.active_screen = ActiveScreen::AddRule;
                             }
+                            KeyCode::Char('e') => {
+                                if !app.rules.is_empty() && app.selected_rule_index < app.rules.len() {
+                                    let rule = app.rules[app.selected_rule_index].clone();
+                                    app.init_edit_rule_form(&rule);
+                                    app.active_screen = ActiveScreen::EditRule;
+                                }
+                            }
                             KeyCode::Char('d') => {
                                 if !app.rules.is_empty() && app.selected_rule_index < app.rules.len() {
                                     let rule = app.rules[app.selected_rule_index].clone();
@@ -199,8 +206,9 @@ fn main() -> Result<(), anyhow::Error> {
                             }
                             _ => {}
                         },
-                        ActiveScreen::AddRule => match key.code {
+                        ActiveScreen::AddRule | ActiveScreen::EditRule => match key.code {
                             KeyCode::Esc => {
+                                app.editing_rule_id = None;
                                 app.active_screen = ActiveScreen::Main;
                             }
                             KeyCode::Tab => {
@@ -283,7 +291,7 @@ fn main() -> Result<(), anyhow::Error> {
                                 }
                                 FormField::Submit => {
                                     let rule = FirewallRule {
-                                        id: "".to_string(),
+                                        id: app.editing_rule_id.clone().unwrap_or_default(),
                                         port: app.form_port.clone(),
                                         protocol: app.form_proto.clone(),
                                         action: app.form_action,
@@ -291,20 +299,46 @@ fn main() -> Result<(), anyhow::Error> {
                                         destination: "Anywhere".to_string(),
                                     };
 
-                                    if let Err(e) = backend.add_rule(&rule) {
-                                        app.active_screen = ActiveScreen::Error(e.to_string());
+                                    if matches!(app.active_screen, ActiveScreen::EditRule) {
+                                        if let Some(ref edit_id) = app.editing_rule_id {
+                                            let old_rule = app.rules.iter().find(|r| &r.id == edit_id).cloned();
+                                            if let Some(old) = old_rule {
+                                                if let Err(e) = backend.edit_rule(edit_id, &rule) {
+                                                    app.active_screen = ActiveScreen::Error(e.to_string());
+                                                } else {
+                                                    let _ = app.logger.log_action(
+                                                        backend.name(),
+                                                        "edit_rule",
+                                                        &format!("Edited rule {} to action={}, port={}, source={}", edit_id, rule.action, rule.port, rule.source)
+                                                    );
+                                                    app.transaction_log.push(app::TransactionAction::RuleEdited(old, rule));
+                                                    app.editing_rule_id = None;
+                                                    let _ = app.refresh_rules(&*backend);
+                                                    app.active_screen = ActiveScreen::Main;
+                                                }
+                                            } else {
+                                                app.active_screen = ActiveScreen::Error("Old rule not found".to_string());
+                                            }
+                                        } else {
+                                            app.active_screen = ActiveScreen::Error("No rule ID to edit".to_string());
+                                        }
                                     } else {
-                                        let _ = app.logger.log_action(
-                                            backend.name(), 
-                                            "add_rule", 
-                                            &format!("Added {} rule on port {} from {}", rule.action, rule.port, rule.source)
-                                        );
-                                        app.transaction_log.push(app::TransactionAction::RuleAdded(rule));
-                                        let _ = app.refresh_rules(&*backend);
-                                        app.active_screen = ActiveScreen::Main;
+                                        if let Err(e) = backend.add_rule(&rule) {
+                                            app.active_screen = ActiveScreen::Error(e.to_string());
+                                        } else {
+                                            let _ = app.logger.log_action(
+                                                backend.name(), 
+                                                "add_rule", 
+                                                &format!("Added {} rule on port {} from {}", rule.action, rule.port, rule.source)
+                                            );
+                                            app.transaction_log.push(app::TransactionAction::RuleAdded(rule));
+                                            let _ = app.refresh_rules(&*backend);
+                                            app.active_screen = ActiveScreen::Main;
+                                        }
                                     }
                                 }
                                 FormField::Cancel => {
+                                    app.editing_rule_id = None;
                                     app.active_screen = ActiveScreen::Main;
                                 }
                                 _ => {}

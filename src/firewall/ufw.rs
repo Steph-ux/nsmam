@@ -152,6 +152,54 @@ impl FirewallBackend for UfwBackend {
         Ok(())
     }
 
+    fn edit_rule(&self, rule_id: &str, new_rule: &FirewallRule) -> Result<(), FirewallError> {
+        let action_str = match new_rule.action {
+            RuleAction::Allow => "allow",
+            RuleAction::Deny => "deny",
+            RuleAction::Reject => "reject",
+        };
+
+        // Note: The insert+delete approach creates a small transient window (~100ms)
+        // where both rules coexist in the UFW ruleset before the old rule is deleted.
+        let mut args = vec!["insert", rule_id, action_str];
+
+        // Format protocol
+        if new_rule.protocol != "any" {
+            args.push("proto");
+            args.push(&new_rule.protocol);
+        }
+
+        // Format source
+        let src = if new_rule.source.eq_ignore_ascii_case("Anywhere") || new_rule.source.is_empty() {
+            "any"
+        } else {
+            &new_rule.source
+        };
+        args.push("from");
+        args.push(src);
+
+        // Format port
+        if new_rule.port != "any" && !new_rule.port.is_empty() {
+            args.push("to");
+            args.push("any");
+            args.push("port");
+            args.push(&new_rule.port);
+        }
+
+        // Execute insert
+        self.run_cmd(&args)?;
+
+        // The old rule shifts down by 1 to rule_id + 1. We delete it now.
+        if let Ok(id_num) = rule_id.parse::<usize>() {
+            let old_rule_id = (id_num + 1).to_string();
+            self.delete_rule(&old_rule_id)?;
+        } else {
+            return Err(FirewallError::ExecutionFailed("Invalid rule ID format for UFW edit".to_string()));
+        }
+
+        Ok(())
+    }
+
     fn delete_rule(&self, rule_id: &str) -> Result<(), FirewallError> {
         self.run_cmd(&["--force", "delete", rule_id])?;
         Ok(())
