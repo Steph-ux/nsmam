@@ -37,19 +37,36 @@ fn detect_backend(forced_backend: &str) -> Box<dyn FirewallBackend> {
         "nftables" => Box::new(nft),
         "iptables" => Box::new(ipt),
         _ => {
-            // Auto-detect priority
-            if ufw.is_active() && ufw.is_enabled() {
+            // Auto-detect priority based on active rules to be zero-config and plug-and-play
+            let has_ufw = ufw.is_active() && ufw.is_enabled();
+            if has_ufw {
                 Box::new(ufw)
-            } else if ipt.is_active() && ipt.is_enabled() {
-                Box::new(ipt)
-            } else if nft.is_active() && nft.is_enabled() {
-                Box::new(nft)
-            } else if ufw.is_active() {
-                Box::new(ufw)
-            } else if ipt.is_active() {
-                Box::new(ipt)
             } else {
-                Box::new(nft)
+                let has_ipt_rules = ipt.is_active() && ipt.get_rules().map(|r| !r.is_empty()).unwrap_or(false);
+                let has_nft_rules = nft.is_active() && nft.is_enabled() && nft.get_rules().map(|r| !r.is_empty()).unwrap_or(false);
+
+                if has_ipt_rules && !has_nft_rules {
+                    Box::new(ipt)
+                } else if has_nft_rules {
+                    Box::new(nft)
+                } else if nft.is_active() && nft.is_enabled() {
+                    Box::new(nft)
+                } else if ipt.is_active() {
+                    // Check if iptables is legacy vs wrapper
+                    if firewall::iptables::is_iptables_legacy("/sbin/iptables") {
+                        Box::new(ipt)
+                    } else if nft.is_active() {
+                        Box::new(nft) // Prefer nftables if iptables is a wrapper
+                    } else {
+                        Box::new(ipt)
+                    }
+                } else if ufw.is_active() {
+                    Box::new(ufw)
+                } else if nft.is_active() {
+                    Box::new(nft)
+                } else {
+                    Box::new(ipt)
+                }
             }
         }
     }
@@ -83,29 +100,6 @@ fn main() -> Result<(), anyhow::Error> {
     // 3. Load configuration
     let config_path = "/etc/nsmam/config.toml";
     let mut app = App::new(config_path, multiplexer_detected);
-
-    // Override backend config if passed via command line arguments
-    let args: Vec<String> = std::env::args().collect();
-    let mut forced_backend = None;
-    let mut i = 1;
-    while i < args.len() {
-        if args[i] == "--backend" || args[i] == "-b" {
-            if i + 1 < args.len() {
-                forced_backend = Some(args[i + 1].clone());
-                i += 2;
-            } else {
-                i += 1;
-            }
-        } else if !args[i].starts_with('-') {
-            forced_backend = Some(args[i].clone());
-            i += 1;
-        } else {
-            i += 1;
-        }
-    }
-    if let Some(fb) = forced_backend {
-        app.config.backend = fb;
-    }
 
     // 4. Initialize firewall backend
     let backend = detect_backend(&app.config.backend);
