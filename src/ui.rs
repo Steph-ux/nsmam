@@ -109,15 +109,38 @@ pub fn draw(f: &mut Frame, app: &mut App, backend: &dyn FirewallBackend) {
         })
         .collect();
 
+    let mut max_id = 5; // "Index"
+    let mut max_port = 4; // "Port"
+    let mut max_proto = 8; // "Protocol"
+    let mut max_action = 6; // "Action"
+    let mut max_source = 6; // "Source"
+    let mut max_dest = 11; // "Destination"
+
+    for r in &app.rules {
+        max_id = max_id.max(r.id.len());
+        max_port = max_port.max(r.port.len());
+        max_proto = max_proto.max(r.protocol.len());
+        max_action = max_action.max(r.action.to_string().len());
+        max_source = max_source.max(r.source.len());
+        max_dest = max_dest.max(r.destination.len());
+    }
+
+    let w_id = (max_id + 2) as u16;
+    let w_port = (max_port + 2) as u16;
+    let w_proto = (max_proto + 2) as u16;
+    let w_action = (max_action + 2) as u16;
+    let w_source = (max_source + 2) as u16;
+    let w_dest = (max_dest + 2) as u16;
+
     let rules_table = Table::new(
         rows,
         [
-            Constraint::Percentage(25),
-            Constraint::Percentage(25),
-            Constraint::Length(10),
-            Constraint::Length(10),
-            Constraint::Percentage(20),
-            Constraint::Percentage(15),
+            Constraint::Min(w_id),
+            Constraint::Min(w_port),
+            Constraint::Length(w_proto),
+            Constraint::Length(w_action),
+            Constraint::Min(w_source),
+            Constraint::Min(w_dest),
         ],
     )
     .header(header_row)
