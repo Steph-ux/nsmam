@@ -8,12 +8,7 @@ if [ "$EUID" -ne 0 ]; then
     exit 1
 fi
 
-# 2. Check cargo & rustc presence
-if ! command -v cargo &> /dev/null || ! command -v rustc &> /dev/null; then
-    echo "Error: Cargo and Rust are required to compile and install NSMAM."
-    echo "Please install Rust (https://rustup.rs) and try again."
-    exit 1
-fi
+# 2. Cargo check deferred (precompiled static binaries preferred)
 
 echo "============================================="
 echo "        NSMAM Installation Script            "
@@ -77,13 +72,41 @@ else
     echo "Log file owned by root:root (adm group not found)"
 fi
 
-# 6. Compile and build Rust TUI
-echo "Compiling NSMAM (this may take a minute)..."
-cargo build --release
+# 6. Install or Compile NSMAM
+if [ -f "./nsmam-x86_64-linux" ] || [ -f "./nsmam-aarch64-linux" ]; then
+    echo "Found precompiled static binaries in the repository."
+    ARCH=$(uname -m)
+    if [ "$ARCH" = "x86_64" ] && [ -f "./nsmam-x86_64-linux" ]; then
+        echo "Using precompiled static binary for x86_64..."
+        cp ./nsmam-x86_64-linux /usr/local/bin/nsmam
+    elif [ "$ARCH" = "aarch64" ] && [ -f "./nsmam-aarch64-linux" ]; then
+        echo "Using precompiled static binary for aarch64..."
+        cp ./nsmam-aarch64-linux /usr/local/bin/nsmam
+    else
+        echo "Precompiled binary not matching or not found for architecture: $ARCH"
+        if command -v cargo &> /dev/null && command -v rustc &> /dev/null; then
+            echo "Compiling from source..."
+            cargo build --release
+            cp target/release/nsmam /usr/local/bin/nsmam
+        else
+            echo "Error: No matching precompiled binary found, and Cargo/Rust are not installed to compile from source."
+            exit 1
+        fi
+    fi
+else
+    # Fallback to compilation if binaries aren't there
+    if command -v cargo &> /dev/null && command -v rustc &> /dev/null; then
+        echo "Compiling from source..."
+        cargo build --release
+        cp target/release/nsmam /usr/local/bin/nsmam
+    else
+        echo "Error: Cargo and Rust are required to compile and install NSMAM."
+        echo "Please install Rust (https://rustup.rs) or download the precompiled releases."
+        exit 1
+    fi
+fi
 
-# 7. Install binary
-echo "Installing nsmam to /usr/local/bin/nsmam..."
-cp target/release/nsmam /usr/local/bin/nsmam
+# 7. Set permissions
 chmod 755 /usr/local/bin/nsmam
 chown root:root /usr/local/bin/nsmam
 

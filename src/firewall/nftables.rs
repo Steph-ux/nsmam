@@ -273,6 +273,129 @@ pub fn select_active_chain(chains: &[NftChain]) -> (String, String, String) {
 }
 
 
+pub fn parse_nftables_table(stdout: &str) -> std::collections::HashMap<String, Vec<String>> {
+    let mut chains = std::collections::HashMap::new();
+    let mut current_chain = String::new();
+    let mut in_chain = false;
+
+    let re_chain = Regex::new(r"^\s*chain\s+(\S+)\s*\{").unwrap();
+
+    for line in stdout.lines() {
+        let trimmed = line.trim();
+        if trimmed.starts_with('}') {
+            in_chain = false;
+            current_chain.clear();
+            continue;
+        }
+
+        if let Some(caps) = re_chain.captures(line) {
+            current_chain = caps.get(1).unwrap().as_str().to_string();
+            in_chain = true;
+            chains.insert(current_chain.clone(), Vec::new());
+            continue;
+        }
+
+        if in_chain && !trimmed.is_empty() {
+            if let Some(rules) = chains.get_mut(&current_chain) {
+                rules.push(trimmed.to_string());
+            }
+        }
+    }
+
+    chains
+}
+
+pub fn get_input_rules(
+    table_stdout: &str,
+    base_chain: &str,
+) -> Vec<(String, String)> {
+    let chains = parse_nftables_table(table_stdout);
+    let mut visited = std::collections::HashSet::new();
+    let mut queue = std::collections::VecDeque::new();
+    let mut collected_rules = Vec::new();
+
+    queue.push_back(base_chain.to_string());
+    visited.insert(base_chain.to_string());
+
+    let re_jump = Regex::new(r"\b(jump|goto)\s+(\S+)").unwrap();
+
+    while let Some(current_chain) = queue.pop_front() {
+        if let Some(rules) = chains.get(&current_chain) {
+            for rule in rules {
+                if let Some(caps) = re_jump.captures(rule) {
+                    let target_chain = caps.get(2).unwrap().as_str().to_string();
+                    if chains.contains_key(&target_chain) && !visited.contains(&target_chain) {
+                        visited.insert(target_chain.clone());
+                        queue.push_back(target_chain);
+                    }
+                }
+                
+                if (rule.contains("accept") || rule.contains("drop") || rule.contains("reject")) 
+                    && rule.contains("handle") 
+                {
+                    collected_rules.push((current_chain.clone(), rule.clone()));
+                }
+            }
+        }
+    }
+
+    collected_rules
+}
+
+pub fn parse_nftables_collected_rules(
+    collected: &[(String, String)],
+) -> Result<Vec<FirewallRule>, FirewallError> {
+    let mut rules = Vec::new();
+    
+    let re_handle = Regex::new(r"handle\s+(\d+)").unwrap();
+    let re_source = Regex::new(r"ip\s+saddr\s+(\{[^}]+\}|\S+)").unwrap();
+    let re_dport = Regex::new(r"(tcp|udp)?\s*dport\s+(\{[^}]+\}|\S+)").unwrap();
+
+    for (chain_name, line) in collected {
+        let trimmed = line.trim();
+
+        if let Some(h_caps) = re_handle.captures(trimmed) {
+            let handle = h_caps.get(1).unwrap().as_str().to_string();
+
+            let action = if trimmed.contains("accept") {
+                RuleAction::Allow
+            } else if trimmed.contains("drop") {
+                RuleAction::Deny
+            } else if trimmed.contains("reject") {
+                RuleAction::Reject
+            } else {
+                continue;
+            };
+
+            let source = re_source
+                .captures(trimmed)
+                .map(|caps| caps.get(1).unwrap().as_str().to_string())
+                .unwrap_or_else(|| "Anywhere".to_string());
+
+            let mut port = "any".to_string();
+            let mut protocol = "any".to_string();
+
+            if let Some(dp_caps) = re_dport.captures(trimmed) {
+                if let Some(proto_match) = dp_caps.get(1) {
+                    protocol = proto_match.as_str().to_string();
+                }
+                port = dp_caps.get(2).unwrap().as_str().to_string();
+            }
+
+            rules.push(FirewallRule {
+                id: format!("{}:{}", chain_name, handle),
+                port,
+                protocol,
+                action,
+                source,
+                destination: "Anywhere".to_string(),
+            });
+        }
+    }
+    Ok(rules)
+}
+
+
 impl FirewallBackend for NftablesBackend {
     fn name(&self) -> &str {
         "nftables"
@@ -303,13 +426,22 @@ impl FirewallBackend for NftablesBackend {
 
     fn get_rules(&self) -> Result<Vec<FirewallRule>, FirewallError> {
         let (family, table, chain) = self.get_active_target();
-        let stdout = match self.run_cmd(&["-a", "list", "chain", &family, &table, &chain]) {
+        let stdout = match self.run_cmd(&["-a", "list", "table", &family, &table]) {
             Ok(out) => out,
             Err(_) => {
-                return Ok(Vec::new());
+                let stdout_chain = match self.run_cmd(&["-a", "list", "chain", &family, &table, &chain]) {
+                    Ok(out) => out,
+                    Err(_) => return Ok(Vec::new()),
+                };
+                let simple_rules = parse_nftables_rules(&stdout_chain)?;
+                return Ok(simple_rules.into_iter().map(|mut r| {
+                    r.id = format!("{}:{}", chain, r.id);
+                    r
+                }).collect());
             }
         };
-        parse_nftables_rules(&stdout)
+        let collected = get_input_rules(&stdout, &chain);
+        parse_nftables_collected_rules(&collected)
     }
 
     fn add_rule(&self, rule: &FirewallRule) -> Result<(), FirewallError> {
@@ -347,10 +479,17 @@ impl FirewallBackend for NftablesBackend {
     }
 
     fn edit_rule(&self, rule_id: &str, new_rule: &FirewallRule) -> Result<(), FirewallError> {
-        let (family, table, chain) = self.get_active_target();
-        let _ = self.initialize_table_if_nsmam(&family, &table, &chain);
+        let (family, table, _chain) = self.get_active_target();
+        let parts: Vec<&str> = rule_id.split(':').collect();
+        let (actual_chain, handle) = if parts.len() == 2 {
+            (parts[0], parts[1])
+        } else {
+            (_chain.as_str(), rule_id)
+        };
+        
+        let _ = self.initialize_table_if_nsmam(&family, &table, actual_chain);
 
-        let mut cmd_args = vec!["replace", "rule", &family, &table, &chain, "handle", rule_id];
+        let mut cmd_args = vec!["replace", "rule", &family, &table, actual_chain, "handle", handle];
         
         let mut source_arg = String::new();
         if new_rule.source != "Anywhere" && !new_rule.source.is_empty() {
@@ -381,8 +520,14 @@ impl FirewallBackend for NftablesBackend {
     }
 
     fn delete_rule(&self, rule_id: &str) -> Result<(), FirewallError> {
-        let (family, table, chain) = self.get_active_target();
-        self.run_cmd(&["delete", "rule", &family, &table, &chain, "handle", rule_id])?;
+        let (family, table, _chain) = self.get_active_target();
+        let parts: Vec<&str> = rule_id.split(':').collect();
+        let (actual_chain, handle) = if parts.len() == 2 {
+            (parts[0], parts[1])
+        } else {
+            (_chain.as_str(), rule_id)
+        };
+        self.run_cmd(&["delete", "rule", &family, &table, actual_chain, "handle", handle])?;
         self.persist_rules()?;
         Ok(())
     }
@@ -502,5 +647,50 @@ mod tests {
         }";
         let policy = parse_nftables_policy(mock_stdout).unwrap();
         assert_eq!(policy, "DROP");
+    }
+
+    #[test]
+    fn test_subchain_bfs_parsing() {
+        let mock_table = "table inet firewalld {\n\
+            chain filter_INPUT {\n\
+                type filter hook input priority filter + 10; policy accept;\n\
+                ct state { established, related } accept # handle 7\n\
+                jump filter_INPUT_ZONES\n\
+                ct state invalid drop # handle 305\n\
+            }\n\
+            chain filter_INPUT_ZONES {\n\
+                goto filter_IN_internal\n\
+            }\n\
+            chain filter_IN_internal {\n\
+                jump filter_IN_internal_allow\n\
+            }\n\
+            chain filter_IN_internal_allow {\n\
+                tcp dport 22 accept # handle 12\n\
+                tcp dport 80 accept # handle 15\n\
+            }\n\
+        }";
+
+        let collected = get_input_rules(mock_table, "filter_INPUT");
+        assert_eq!(collected.len(), 4);
+        assert_eq!(collected[0].0, "filter_INPUT");
+        assert!(collected[0].1.contains("established"));
+        assert_eq!(collected[1].0, "filter_INPUT");
+        assert!(collected[1].1.contains("invalid"));
+        assert_eq!(collected[2].0, "filter_IN_internal_allow");
+        assert!(collected[2].1.contains("22"));
+        assert_eq!(collected[3].0, "filter_IN_internal_allow");
+        assert!(collected[3].1.contains("80"));
+
+        let rules = parse_nftables_collected_rules(&collected).unwrap();
+        assert_eq!(rules.len(), 4);
+        assert_eq!(rules[0].id, "filter_INPUT:7");
+        assert_eq!(rules[0].port, "any");
+        assert_eq!(rules[1].id, "filter_INPUT:305");
+        assert_eq!(rules[1].action, RuleAction::Deny);
+        assert_eq!(rules[2].id, "filter_IN_internal_allow:12");
+        assert_eq!(rules[2].port, "22");
+        assert_eq!(rules[2].protocol, "tcp");
+        assert_eq!(rules[3].id, "filter_IN_internal_allow:15");
+        assert_eq!(rules[3].port, "80");
     }
 }

@@ -94,15 +94,98 @@ fn main() -> Result<(), anyhow::Error> {
     // 1. Root Privilege check
     check_privileges();
 
-    // 2. Multiplexer check
+    // 2. Parse command-line arguments
+    let args: Vec<String> = std::env::args().collect();
+    let mut forced_backend = None;
+    let mut list_rules = false;
+    let mut show_status = false;
+
+    let mut i = 1;
+    while i < args.len() {
+        match args[i].as_str() {
+            "-h" | "--help" => {
+                println!("NSMAM (Network Security Manager All-in-One Monitor)");
+                println!("Usage:");
+                println!("  nsmam [options]");
+                println!();
+                println!("Options:");
+                println!("  -h, --help             Show this help message");
+                println!("  -l, --list             List active firewall rules and exit");
+                println!("  -s, --status           Show firewall status and exit");
+                println!("  -b, --backend <name>   Force a firewall backend (ufw, nftables, iptables, auto)");
+                return Ok(());
+            }
+            "-l" | "--list" => {
+                list_rules = true;
+                i += 1;
+            }
+            "-s" | "--status" => {
+                show_status = true;
+                i += 1;
+            }
+            "-b" | "--backend" => {
+                if i + 1 < args.len() {
+                    forced_backend = Some(args[i + 1].clone());
+                    i += 2;
+                } else {
+                    eprintln!("Error: --backend requires a value.");
+                    std::process::exit(1);
+                }
+            }
+            _ => {
+                eprintln!("Unknown argument: {}", args[i]);
+                println!("Run with --help to see usage.");
+                std::process::exit(1);
+            }
+        }
+    }
+
+    // 3. Multiplexer check
     let multiplexer_detected = is_multiplexer_active();
 
-    // 3. Load configuration
+    // 4. Load configuration
     let config_path = "/etc/nsmam/config.toml";
     let mut app = App::new(config_path, multiplexer_detected);
 
-    // 4. Initialize firewall backend
+    // Override config backend if forced via command line
+    if let Some(ref backend) = forced_backend {
+        app.config.backend = backend.clone();
+    }
+
+    // 5. Initialize firewall backend
     let backend = detect_backend(&app.config.backend);
+
+    if list_rules {
+        println!("Active Firewall Backend: {}", backend.name());
+        println!("Enabled: {}", backend.is_enabled());
+        println!("Default Policy: {}", backend.get_default_policy().unwrap_or_else(|_| "UNKNOWN".to_string()));
+        println!();
+        println!("{:<5} {:<15} {:<10} {:<10} {:<20} {:<20}", "ID", "PORT", "PROTOCOL", "ACTION", "SOURCE", "DESTINATION");
+        println!("{}", "-".repeat(85));
+        match backend.get_rules() {
+            Ok(rules) => {
+                if rules.is_empty() {
+                    println!("No active rules found.");
+                } else {
+                    for r in rules {
+                        println!("{:<5} {:<15} {:<10} {:<10} {:<20} {:<20}", r.id, r.port, r.protocol, r.action.to_string(), r.source, r.destination);
+                    }
+                }
+            }
+            Err(e) => {
+                eprintln!("Error retrieving rules: {}", e);
+            }
+        }
+        return Ok(());
+    }
+
+    if show_status {
+        println!("Active Firewall Backend: {}", backend.name());
+        println!("Enabled: {}", backend.is_enabled());
+        println!("Default Policy: {}", backend.get_default_policy().unwrap_or_else(|_| "UNKNOWN".to_string()));
+        return Ok(());
+    }
+
     if let Err(e) = app.refresh_rules(&*backend) {
         eprintln!("Warning: Failed to fetch initial ruleset: {}", e);
     }
