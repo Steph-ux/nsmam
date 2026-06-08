@@ -112,12 +112,12 @@ pub fn draw(f: &mut Frame, app: &mut App, backend: &dyn FirewallBackend) {
     let rules_table = Table::new(
         rows,
         [
-            Constraint::Length(8),
-            Constraint::Length(15),
-            Constraint::Length(12),
-            Constraint::Length(12),
-            Constraint::Percentage(30),
+            Constraint::Percentage(25),
+            Constraint::Percentage(25),
+            Constraint::Length(10),
+            Constraint::Length(10),
             Constraint::Percentage(20),
+            Constraint::Percentage(15),
         ],
     )
     .header(header_row)
