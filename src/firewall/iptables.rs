@@ -9,7 +9,7 @@ pub struct IptablesBackend {
 impl IptablesBackend {
     pub fn new() -> Self {
         Self {
-            binary_path: "/sbin/iptables".to_string(),
+            binary_path: super::find_binary("iptables"),
         }
     }
 

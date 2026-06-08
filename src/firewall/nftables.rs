@@ -9,7 +9,7 @@ pub struct NftablesBackend {
 impl NftablesBackend {
     pub fn new() -> Self {
         Self {
-            binary_path: "/sbin/nft".to_string(),
+            binary_path: super::find_binary("nft"),
         }
     }
 

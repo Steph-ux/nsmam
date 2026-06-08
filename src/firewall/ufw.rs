@@ -9,7 +9,7 @@ pub struct UfwBackend {
 impl UfwBackend {
     pub fn new() -> Self {
         Self {
-            binary_path: "/sbin/ufw".to_string(),
+            binary_path: super::find_binary("ufw"),
         }
     }
 

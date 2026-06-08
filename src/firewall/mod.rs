@@ -9,6 +9,32 @@ pub use nftables::NftablesBackend;
 use std::fmt;
 use thiserror::Error;
 
+pub fn find_binary(name: &str) -> String {
+    if let Ok(path_var) = std::env::var("PATH") {
+        for path in std::env::split_paths(&path_var) {
+            let candidate = path.join(name);
+            if candidate.is_file() {
+                return candidate.to_string_lossy().into_owned();
+            }
+        }
+    }
+    // Common fallback paths on various Linux distributions
+    let fallbacks = [
+        format!("/sbin/{}", name),
+        format!("/usr/sbin/{}", name),
+        format!("/usr/bin/{}", name),
+        format!("/bin/{}", name),
+    ];
+    for path in &fallbacks {
+        if std::path::Path::new(path).is_file() {
+            return path.clone();
+        }
+    }
+    // Ultimate fallback
+    format!("/sbin/{}", name)
+}
+
+
 #[derive(Debug, Error)]
 pub enum FirewallError {
     #[error("Command execution failed: {0}")]
